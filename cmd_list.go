@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -23,11 +24,15 @@ const (
 
 func listCommand() *cli.Command {
 	return &cli.Command{
-		Name:    "list",
-		Aliases: []string{"ls"},
-		Usage:   "List repositories in the workspace",
+		Name:      "list",
+		Aliases:   []string{"ls"},
+		Usage:     "List repositories in the workspace",
+		ArgsUsage: "[NAME...]",
 		Description: "Results are cached for 14 days. Large listings are shown in a pager\n" +
-			"($PAGER, default less) when printing to a terminal.",
+			"($PAGER, default less) when printing to a terminal.\n\n" +
+			"NAME arguments are matched case-insensitively against repository names, and * matches\n" +
+			"any run of characters. Quote patterns so the shell doesn't expand them:\n" +
+			"   bb ls '*-foo-*'",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "stale",
@@ -48,7 +53,8 @@ func listCommand() *cli.Command {
 				Usage: "sort by `COLUMN`: name (A-Z) or updated (newest first)",
 			},
 		},
-		Action: runList,
+		ShellComplete: completeRepoNames(0),
+		Action:        runList,
 	}
 }
 
@@ -72,6 +78,18 @@ func runList(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	if patterns := cmd.Args().Slice(); len(patterns) > 0 {
+		var missing []string
+		repos, missing = filterRepositories(repos, patterns)
+		if len(missing) > 0 {
+			hint := ""
+			if !cachedAt.IsZero() {
+				hint = fmt.Sprintf(" (cached list from %s; try --refresh)", cachedAt.Local().Format("2006-01-02"))
+			}
+			return fmt.Errorf("no repositories match in workspace %q: %s%s", cfg.Workspace, strings.Join(missing, ", "), hint)
+		}
+	}
+
 	quiet := cmd.Bool("quiet")
 	if len(repos) == 0 {
 		if !quiet {
@@ -122,6 +140,45 @@ func loadRepositories(ctx context.Context, cfg *Config, stale, refresh bool) (re
 		lipgloss.Fprintln(os.Stderr, errorStyle.Render("warning: couldn't cache results: "+err.Error()))
 	}
 	return repos, time.Time{}, nil
+}
+
+// wildcardRegexp compiles a pattern where * matches any run of characters (including none)
+// and everything else is literal. Matching is case-insensitive and must cover the whole name.
+func wildcardRegexp(pattern string) *regexp.Regexp {
+	parts := strings.Split(pattern, "*")
+	for i, p := range parts {
+		parts[i] = regexp.QuoteMeta(p)
+	}
+	return regexp.MustCompile("(?i)^" + strings.Join(parts, ".*") + "$")
+}
+
+// filterRepositories returns the repositories (in their original order) whose slug matches at
+// least one pattern, plus any patterns that matched nothing.
+func filterRepositories(repos []Repository, patterns []string) (matched []Repository, missing []string) {
+	res := make([]*regexp.Regexp, len(patterns))
+	for i, p := range patterns {
+		res[i] = wildcardRegexp(p)
+	}
+
+	hit := make([]bool, len(patterns))
+	for _, r := range repos {
+		var found bool
+		for i, re := range res {
+			if re.MatchString(r.Slug) {
+				hit[i], found = true, true
+			}
+		}
+		if found {
+			matched = append(matched, r)
+		}
+	}
+
+	for i, p := range patterns {
+		if !hit[i] {
+			missing = append(missing, p)
+		}
+	}
+	return matched, missing
 }
 
 // sortRepositories sorts repos in place by name (A-Z) or last update (newest first).

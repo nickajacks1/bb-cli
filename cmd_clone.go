@@ -8,9 +8,11 @@ import (
 
 func cloneCommand() *cli.Command {
 	return &cli.Command{
-		Name:   "clone",
-		Usage:  "Clone a repository",
-		Action: runClone,
+		Name:          "clone",
+		Usage:         "Clone a repository",
+		ArgsUsage:     "<repo>",
+		ShellComplete: completeRepoNames(1),
+		Action:        runClone,
 	}
 }
 
