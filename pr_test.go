@@ -185,9 +185,12 @@ func TestPRSelector(t *testing.T) {
 		return next.(prSelector)
 	}
 
-	m := press(press(newPRSelector(prs, prActions{}), tea.KeyDown), tea.KeyEnter)
+	m := press(press(newPRSelector(prs, prActions{}), tea.KeyDown), 'w')
 	if m.selected == nil || m.selected.ID != 2 {
-		t.Errorf("down+enter selected %+v, want #2", m.selected)
+		t.Errorf("down+w selected %+v, want #2", m.selected)
+	}
+	if m := press(newPRSelector(prs, prActions{}), tea.KeyEnter); m.selected != nil || m.mode != modeList {
+		t.Errorf("enter must not select (the browser is on w): selected %+v, mode %v", m.selected, m.mode)
 	}
 
 	for _, key := range []rune{'q', tea.KeyEscape} {

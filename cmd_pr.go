@@ -38,12 +38,17 @@ func prListCommand() *cli.Command {
 		ArgsUsage: "[REPO]",
 		Description: "REPO defaults to the repository the current git checkout was cloned from.\n\n" +
 			"On a terminal this opens an interactive table: move with the arrow keys, press enter to\n" +
-			"open the selected pull request in your browser (its URL is also printed), v to preview its\n" +
-			"diff in the terminal, c to comment on it, q to quit.\n\n" +
+			"view the selected pull request's diff, w to open it in your browser (its URL is also\n" +
+			"printed), t to read its comments, c to comment on it, q to quit.\n\n" +
 			"In the diff preview, s switches between unified and side-by-side layouts (side by side\n" +
 			"needs a wide terminal), j/k move a line cursor, c comments on the cursor's line, and\n" +
 			"C comments on the pull request as a whole. In the side-by-side layout, h/l choose\n" +
-			"whether the old or the new side is commented on. ctrl+s posts a comment.\n" +
+			"whether the old or the new side is commented on. ctrl+s posts a comment.\n\n" +
+			"Lines with comments are marked with a dot: n/N jump between them, enter reads the\n" +
+			"comments on the cursor's line, and T reads all of them.\n\n" +
+			"a approves the pull request (after asking you to confirm), and w opens it in the browser.\n" +
+			"The preview's title bar ends with the pull request's build counts, e.g. \"Builds: 3 success,\n" +
+			"1 failed, 2 in progress\" (green, red and yellow). States with no builds are left out.\n" +
 			"When output is piped, the table is printed instead.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -97,6 +102,15 @@ func runPRList(ctx context.Context, cmd *cli.Command) error {
 	pr, err := selectPullRequest(prs, prActions{
 		loadDiff: func(pr PullRequest) (string, bool, error) {
 			return getPullRequestDiff(ctx, cfg, slug, pr.ID)
+		},
+		loadBuilds: func(pr PullRequest) ([]BuildStatus, error) {
+			return listBuildStatuses(ctx, cfg, slug, pr.ID)
+		},
+		approve: func(pr PullRequest) error {
+			return approvePullRequest(ctx, cfg, slug, pr.ID)
+		},
+		loadComments: func(pr PullRequest) ([]Comment, error) {
+			return listComments(ctx, cfg, slug, pr.ID)
 		},
 		postComment: func(pr PullRequest, c newComment) error {
 			return createComment(ctx, cfg, slug, pr.ID, c)

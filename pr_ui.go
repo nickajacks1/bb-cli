@@ -45,6 +45,9 @@ const (
 	modeDiff
 	modeComment
 	modeSending
+	modeLoadingComments // from the list: waiting for comments to read
+	modeThreads         // reading comment threads
+	modeApproving       // waiting for Bitbucket to record an approval
 )
 
 // prActions are the things the selector can do beyond choosing a pull request. A nil action
@@ -54,6 +57,12 @@ type prActions struct {
 	loadDiff func(PullRequest) (diff string, truncated bool, err error)
 	// postComment posts a comment on a pull request.
 	postComment func(PullRequest, newComment) error
+	// approve approves a pull request.
+	approve func(PullRequest) error
+	// loadBuilds fetches the build statuses reported for a pull request.
+	loadBuilds func(PullRequest) ([]BuildStatus, error)
+	// loadComments fetches every comment on a pull request.
+	loadComments func(PullRequest) ([]Comment, error)
 }
 
 // prSelector is an interactive table of pull requests. Enter picks one; v previews its diff
@@ -73,6 +82,16 @@ type prSelector struct {
 	diffNote string     // shown in the preview's help line, e.g. that the diff was cut short
 
 	comment commentForm
+
+	confirmApprove bool // the diff preview is asking whether to approve pr
+
+	builds buildCounts // the builds of the pull request in pr
+
+	// The comments of the pull request in pr, once loaded.
+	threads       []thread
+	commentsReady bool
+	threadView    threadView // the comment reader
+	threadsBack   prMode     // the screen the comment reader returns to
 
 	notice   string // one-off message, cleared by the next key press
 	noticeOK bool   // whether the notice reports success rather than a problem
@@ -123,10 +142,16 @@ func (m prSelector) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prDiffMsg:
 		return m.diffLoaded(msg), nil
 	case prCommentMsg:
-		return m.commentPosted(msg), nil
+		return m.commentPosted(msg)
+	case prCommentsMsg:
+		return m.commentsLoaded(msg), nil
+	case prBuildsMsg:
+		return m.buildsLoaded(msg), nil
+	case prApproveMsg:
+		return m.approved(msg), nil
 	case tea.KeyPressMsg:
 		switch m.mode {
-		case modeLoadingDiff:
+		case modeLoadingDiff, modeLoadingComments:
 			switch msg.String() {
 			case "ctrl+c":
 				return m, tea.Quit
@@ -138,7 +163,9 @@ func (m prSelector) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDiff(msg)
 		case modeComment:
 			return m.updateComment(msg)
-		case modeSending:
+		case modeThreads:
+			return m.updateThreads(msg)
+		case modeSending, modeApproving:
 			if msg.String() == "ctrl+c" {
 				return m, tea.Quit
 			}
@@ -160,17 +187,25 @@ func (m prSelector) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m prSelector) updateList(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.notice = ""
 	switch msg.String() {
-	case "enter":
+	case "w": // open in the browser
 		m.selected = &m.prs[m.table.Cursor()]
 		return m, tea.Quit
 	case "q", "esc", "ctrl+c":
 		return m, tea.Quit
-	case "v":
+	case "enter", "v":
 		if m.actions.loadDiff == nil {
 			return m, nil
 		}
 		m.mode, m.pr = modeLoadingDiff, m.prs[m.table.Cursor()]
-		return m, m.fetchDiff(m.pr)
+		m.threads, m.commentsReady, m.builds = nil, false, buildCounts{}
+		return m, tea.Batch(m.fetchDiff(m.pr), m.fetchComments(m.pr), m.fetchBuilds(m.pr))
+	case "t":
+		if m.actions.loadComments == nil {
+			return m, nil
+		}
+		m.mode, m.pr = modeLoadingComments, m.prs[m.table.Cursor()]
+		m.threads, m.commentsReady, m.builds = nil, false, buildCounts{}
+		return m, m.fetchComments(m.pr)
 	case "c":
 		if m.actions.postComment == nil {
 			return m, nil
@@ -188,6 +223,7 @@ func (m *prSelector) resize(width, height int) {
 	// Leave room for the help line and a blank line; the header row counts toward the height.
 	m.table.SetHeight(max(3, min(len(m.prs)+1, height-3)))
 	m.viewer.resize(width, height-diffChrome)
+	m.threadView.resize(width, height-diffChrome)
 	if m.comment.open {
 		m.comment.resize(width, height)
 	}
@@ -202,6 +238,12 @@ func (m prSelector) View() tea.View {
 		content = m.diffView()
 	case modeComment, modeSending:
 		content = m.commentView()
+	case modeApproving:
+		content = dimStyle.Render(fmt.Sprintf("Approving #%d...", m.pr.ID))
+	case modeLoadingComments:
+		content = dimStyle.Render(fmt.Sprintf("Loading the comments of #%d...  (q to cancel)", m.pr.ID))
+	case modeThreads:
+		content = m.threadsView()
 	default:
 		content = m.listView()
 	}
@@ -212,9 +254,13 @@ func (m prSelector) View() tea.View {
 }
 
 func (m prSelector) listView() string {
-	help := "↑/↓ navigate • enter open in browser"
+	help := "↑/↓ navigate"
 	if m.actions.loadDiff != nil {
-		help += " • v view diff"
+		help += " • enter view diff"
+	}
+	help += " • w open in browser"
+	if m.actions.loadComments != nil {
+		help += " • t read comments"
 	}
 	if m.actions.postComment != nil {
 		help += " • c comment"

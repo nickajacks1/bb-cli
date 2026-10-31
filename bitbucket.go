@@ -383,3 +383,84 @@ func createComment(ctx context.Context, cfg *Config, slug string, id int, c newC
 	}
 	return resp.Body.Close()
 }
+
+// listComments returns every comment on a pull request, inline and general, in API order.
+func listComments(ctx context.Context, cfg *Config, slug string, id int) ([]Comment, error) {
+	next := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/comments?pagelen=100",
+		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
+
+	var comments []Comment
+	for next != "" {
+		resp, err := get(ctx, cfg, next)
+		if errors.Is(err, errNotFound) {
+			return nil, fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		var page struct {
+			Values []Comment `json:"values"`
+			Next   string    `json:"next"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&page)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decode comments: %w", err)
+		}
+		comments = append(comments, page.Values...)
+		next = page.Next
+	}
+	return comments, nil
+}
+
+// approvePullRequest approves a pull request as the authenticated user. Approving twice is harmless.
+func approvePullRequest(ctx context.Context, cfg *Config, slug string, id int) error {
+	endpoint := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/approve",
+		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
+	resp, err := do(ctx, cfg, http.MethodPost, endpoint, nil)
+	if errors.Is(err, errNotFound) {
+		return fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
+	}
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
+// BuildStatus is a build (commit status) reported against a pull request's source commit.
+type BuildStatus struct {
+	Key       string    `json:"key"`
+	State     string    `json:"state"` // SUCCESSFUL, FAILED, INPROGRESS or STOPPED
+	UpdatedOn time.Time `json:"updated_on"`
+}
+
+// listBuildStatuses returns the build statuses reported for a pull request.
+func listBuildStatuses(ctx context.Context, cfg *Config, slug string, id int) ([]BuildStatus, error) {
+	next := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/statuses?pagelen=100",
+		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
+
+	var statuses []BuildStatus
+	for next != "" {
+		resp, err := get(ctx, cfg, next)
+		if errors.Is(err, errNotFound) {
+			return nil, fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		var page struct {
+			Values []BuildStatus `json:"values"`
+			Next   string        `json:"next"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&page)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decode build statuses: %w", err)
+		}
+		statuses = append(statuses, page.Values...)
+		next = page.Next
+	}
+	return statuses, nil
+}

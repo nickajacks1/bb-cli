@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // diffChrome is the number of screen lines the diff preview uses besides the diff itself:
@@ -40,6 +41,9 @@ func (m prSelector) diffLoaded(msg prDiffMsg) prSelector {
 	}
 
 	m.viewer = newDiffViewer(msg.diff, m.width, m.height-diffChrome, m.split)
+	if m.commentsReady {
+		m.viewer.setThreads(m.threads)
+	}
 	m.diffNote = ""
 	if msg.truncated {
 		m.diffNote = fmt.Sprintf("diff truncated at %d MiB • ", maxDiffBytes>>20)
@@ -51,9 +55,27 @@ func (m prSelector) diffLoaded(msg prDiffMsg) prSelector {
 // updateDiff handles a key press while the diff preview is showing.
 func (m prSelector) updateDiff(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.notice = ""
+	if m.confirmApprove { // y confirms; anything else (but ctrl+c) backs out
+		m.confirmApprove = false
+		if k := msg.String(); k == "y" || k == "Y" {
+			m.mode = modeApproving
+			return m, m.approve(m.pr)
+		} else if k != "ctrl+c" {
+			return m, nil
+		}
+	}
+
 	switch key := msg.String(); key {
 	case "ctrl+c":
 		return m, tea.Quit
+	case "w": // open in the browser
+		pr := m.pr
+		m.selected = &pr
+		return m, tea.Quit
+	case "a":
+		if m.actions.approve != nil {
+			m.confirmApprove = true
+		}
 	case "q", "esc", "backspace":
 		m.mode = modeList
 	case "s":
@@ -67,17 +89,30 @@ func (m prSelector) updateDiff(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.actions.postComment == nil {
 			return m, nil
 		}
-		line, ref, ok := m.viewer.commentLine()
+		_, ref, ok := m.viewer.commentLine()
 		if !ok {
 			m.notice, m.noticeOK = "Can't comment on this line: move to an added, removed or unchanged line (C comments on the pull request)", false
 			return m, nil
 		}
-		return m.openComment(modeDiff, m.pr, &ref, inlineDescription(ref, line))
+		return m.openComment(modeDiff, m.pr, &ref, inlineDescription(ref))
 	case "C":
 		if m.actions.postComment == nil {
 			return m, nil
 		}
 		return m.openComment(modeDiff, m.pr, nil, "")
+	case "enter":
+		return m.readLineComments()
+	case "T":
+		return m.readAllComments(modeDiff)
+	case "n", "N":
+		if m.actions.loadComments == nil {
+			return m, nil
+		}
+		if !m.commentsReady {
+			m.notice, m.noticeOK = "Comments are still loading", false
+		} else if !m.viewer.jump(map[string]int{"n": 1, "N": -1}[key]) {
+			m.notice, m.noticeOK = "No more commented lines", false
+		}
 	default:
 		m.viewer.handleKey(key)
 	}
@@ -85,11 +120,11 @@ func (m prSelector) updateDiff(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // inlineDescription says where an inline comment will attach, e.g. "f.go:34 (new)".
-func inlineDescription(ref inlineRef, line diffLine) string {
-	if ref.from > 0 {
-		return fmt.Sprintf("%s:%d (old)", ref.path, ref.from)
+func inlineDescription(ref inlineRef) string {
+	if ref.to > 0 {
+		return fmt.Sprintf("%s:%d (new)", ref.path, ref.to)
 	}
-	return fmt.Sprintf("%s:%d (new)", ref.path, ref.to)
+	return fmt.Sprintf("%s:%d (old)", ref.path, ref.from)
 }
 
 func (m prSelector) diffView() string {
@@ -97,11 +132,16 @@ func (m prSelector) diffView() string {
 	if m.viewer.rowsSplit {
 		layout = "split"
 	}
-	title := titleStyle.Render(fmt.Sprintf("#%d %s", m.pr.ID, truncate(m.pr.Title, max(10, m.width-30))))
-	title += dimStyle.Render(fmt.Sprintf("  %d%%  %s", m.viewer.percent(), layout))
+	// The title gives way to the status text on the right, so the build counts are never cut off.
+	status := dimStyle.Render(fmt.Sprintf("  %d%%  %s%s", m.viewer.percent(), layout, m.commentsSummary())) + m.buildsSummary()
+	id := fmt.Sprintf("#%d ", m.pr.ID)
+	room := m.width - ansi.StringWidth(id) - ansi.StringWidth(status) - 1
+	title := titleStyle.Render(id+truncate(m.pr.Title, max(10, room))) + status
 
 	var footer string
-	if m.notice != "" {
+	if m.confirmApprove {
+		footer = titleStyle.Render(fmt.Sprintf("Approve #%d? Press y to confirm, any other key cancels.", m.pr.ID))
+	} else if m.notice != "" {
 		footer = m.noticeStyled()
 	} else {
 		footer = dimStyle.Render(m.diffNote + m.diffHelp())
@@ -110,14 +150,46 @@ func (m prSelector) diffView() string {
 }
 
 func (m prSelector) diffHelp() string {
-	help := []string{"j/k move", "space/b page", "g/G top/bottom"}
+	help := []string{"q back", "j/k move"}
 	if m.viewer.rowsSplit {
 		help = append(help, "←/→ side", "s unified")
 	} else {
 		help = append(help, "←/→ pan", "s split")
 	}
-	if m.actions.postComment != nil {
-		help = append(help, "c comment line", "C comment PR")
+	if m.actions.loadComments != nil {
+		help = append(help, "enter/T read", "n/N jump")
 	}
-	return strings.Join(append(help, "q back"), " • ")
+	if m.actions.postComment != nil {
+		help = append(help, "c/C comment")
+	}
+	if m.actions.approve != nil {
+		help = append(help, "a approve")
+	}
+	return strings.Join(append(help, "w web"), " • ")
+}
+
+// prApproveMsg delivers the result of approving a pull request.
+type prApproveMsg struct {
+	id  int
+	err error
+}
+
+// approve returns a command that approves pr in the background.
+func (m prSelector) approve(pr PullRequest) tea.Cmd {
+	approve := m.actions.approve
+	return func() tea.Msg { return prApproveMsg{id: pr.ID, err: approve(pr)} }
+}
+
+// approved handles the result of approving, returning to the preview either way.
+func (m prSelector) approved(msg prApproveMsg) prSelector {
+	if m.mode != modeApproving || msg.id != m.pr.ID {
+		return m
+	}
+	m.mode = modeDiff
+	if msg.err != nil {
+		m.notice, m.noticeOK = fmt.Sprintf("Couldn't approve #%d: %v", msg.id, msg.err), false
+		return m
+	}
+	m.notice, m.noticeOK = fmt.Sprintf("✓ Approved #%d", msg.id), true
+	return m
 }

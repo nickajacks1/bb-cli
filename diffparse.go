@@ -54,10 +54,10 @@ func (l diffLine) inlineRef() (inlineRef, bool) {
 
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
-// sanitizeDiff makes diff text safe to print: carriage returns are dropped, tabs become spaces
+// sanitizeText makes diff text safe to print: carriage returns are dropped, tabs become spaces
 // and other control characters (which could carry terminal escape sequences from an
 // untrusted diff) are replaced with U+FFFD.
-func sanitizeDiff(s string) string {
+func sanitizeText(s string) string {
 	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r", ""), "\t", "    ")
 	return strings.Map(func(r rune) rune {
 		if r == '\n' {
@@ -74,7 +74,7 @@ func sanitizeDiff(s string) string {
 // Hunk bodies are delimited by the line counts in their headers, so a removed line whose text
 // starts with "-- " is not mistaken for a file header.
 func parseDiff(diff string) []diffLine {
-	raw := strings.Split(sanitizeDiff(diff), "\n")
+	raw := strings.Split(sanitizeText(diff), "\n")
 	if n := len(raw); n > 0 && raw[n-1] == "" {
 		raw = raw[:n-1]
 	}

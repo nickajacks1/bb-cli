@@ -20,6 +20,8 @@ var (
 	diffHunkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("37"))
 	diffFileStyle = lipgloss.NewStyle().Bold(true)
 	diffMarkStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	// Where a line has comments.
+	diffCommentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
 
 // diffViewer is a scrollable diff with a line cursor, shown either as a unified diff or as two
@@ -35,6 +37,8 @@ type diffViewer struct {
 	offset int // first visible row
 	xoff   int // horizontal pan, unified layout only
 	side   int // split layout: 0 = old (left), 1 = new (right); which side comments attach to
+
+	commented map[int][]int // diff line index -> indexes of the comment threads on it
 
 	width, height int
 	numWidth      int // digits in the widest line number
@@ -56,6 +60,44 @@ func newDiffViewer(diff string, width, height int, split bool) diffViewer {
 	v.numWidth = len(strconv.Itoa(most))
 	v.layout()
 	return v
+}
+
+// setThreads marks the lines that have comments.
+func (v *diffViewer) setThreads(threads []thread) { v.commented = threadsByLine(v.lines, threads) }
+
+// jump moves the cursor to the next (dir > 0) or previous row that has a comment and reports
+// whether there was one. In the split layout the active side follows the commented line.
+func (v *diffViewer) jump(dir int) bool {
+	for i := v.cursor + dir; i >= 0 && i < len(v.rows); i += dir {
+		r := v.rows[i]
+		left, right := r.left >= 0 && len(v.commented[r.left]) > 0, r.right >= 0 && len(v.commented[r.right]) > 0
+		if !left && !right {
+			continue
+		}
+		v.moveTo(i)
+		if v.rowsSplit && left != right {
+			v.side = map[bool]int{true: 1, false: 0}[right]
+		}
+		return true
+	}
+	return false
+}
+
+// cursorThreads returns the indexes of the comment threads on the cursor's line.
+func (v diffViewer) cursorThreads() []int {
+	i := v.cursorLine()
+	if i < 0 {
+		return nil
+	}
+	return v.commented[i]
+}
+
+// sep is the character between a line's number and its text: a dot where it has comments.
+func (v diffViewer) sep(idx int) string {
+	if len(v.commented[idx]) > 0 {
+		return diffCommentStyle.Render("●")
+	}
+	return " "
 }
 
 func (v *diffViewer) resize(width, height int) {
@@ -205,7 +247,7 @@ func (v diffViewer) renderRow(i int) string {
 	r := v.rows[i]
 	isCursor := i == v.cursor
 	if !v.rowsSplit {
-		return v.renderUnified(v.lines[r.left], isCursor)
+		return v.renderUnified(r.left, isCursor)
 	}
 
 	if r.left >= 0 && r.right < 0 && !v.lines[r.left].isContent() {
@@ -222,7 +264,7 @@ func (v diffViewer) renderRow(i int) string {
 		tw := max(1, cw-(v.numWidth+2))
 		text := ansi.Truncate(l.text, tw, "…")
 		text += strings.Repeat(" ", max(0, tw-ansi.StringWidth(text)))
-		return mark(here) + dimStyle.Render(v.num(num)) + " " + kindStyle(l.kind).Render(text)
+		return mark(here) + dimStyle.Render(v.num(num)) + v.sep(idx) + kindStyle(l.kind).Render(text)
 	}
 
 	rightActive := (v.side == 1 && r.right >= 0) || r.left < 0
@@ -236,7 +278,8 @@ func (v diffViewer) renderRow(i int) string {
 	return cell(r.left, oldNo, isCursor && !rightActive) + dimStyle.Render("│") + cell(r.right, newNo, isCursor && rightActive)
 }
 
-func (v diffViewer) renderUnified(l diffLine, isCursor bool) string {
+func (v diffViewer) renderUnified(idx int, isCursor bool) string {
+	l := v.lines[idx]
 	text := l.text
 	switch l.kind {
 	case diffAdd:
@@ -247,7 +290,7 @@ func (v diffViewer) renderUnified(l diffLine, isCursor bool) string {
 		text = " " + text
 	}
 	text = ansi.Cut(text, v.xoff, v.xoff+v.textWidth())
-	return mark(isCursor) + dimStyle.Render(v.num(l.oldNo)+" "+v.num(l.newNo)) + " " + kindStyle(l.kind).Render(text)
+	return mark(isCursor) + dimStyle.Render(v.num(l.oldNo)+" "+v.num(l.newNo)) + v.sep(idx) + kindStyle(l.kind).Render(text)
 }
 
 // num right-aligns a line number in the gutter; zero (no line) is blank.

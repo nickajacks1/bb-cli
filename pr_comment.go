@@ -81,14 +81,14 @@ func (m prSelector) postComment(body string) tea.Cmd {
 
 // commentPosted handles the result of posting: on success it returns to the screen the comment
 // was started from, on failure it keeps the text so nothing typed is lost.
-func (m prSelector) commentPosted(msg prCommentMsg) prSelector {
+func (m prSelector) commentPosted(msg prCommentMsg) (prSelector, tea.Cmd) {
 	if m.mode != modeSending || msg.id != m.pr.ID {
-		return m
+		return m, nil
 	}
 	if msg.err != nil {
 		m.mode = modeComment
 		m.comment.err = fmt.Sprintf("Couldn't post the comment: %v", msg.err)
-		return m
+		return m, nil
 	}
 
 	where := fmt.Sprintf("#%d", m.pr.ID)
@@ -97,7 +97,7 @@ func (m prSelector) commentPosted(msg prCommentMsg) prSelector {
 	}
 	m.mode, m.comment.open = m.comment.back, false
 	m.notice, m.noticeOK = "✓ Comment posted on "+where, true
-	return m
+	return m, m.fetchComments(m.pr) // so the new comment shows up
 }
 
 func (m prSelector) commentView() string {
