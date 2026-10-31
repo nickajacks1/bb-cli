@@ -203,19 +203,24 @@ func renderRepoTable(repos []Repository) string {
 		})
 	}
 
+	return renderTable([]string{"NAME", "UPDATED", "DESCRIPTION"}, rows, 0)
+}
+
+// renderTable renders borderless columns with a bold header, coloring the highlight column.
+func renderTable(headers []string, rows [][]string, highlight int) string {
 	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).PaddingRight(2)
 	cell := lipgloss.NewStyle().PaddingRight(2)
 	name := cell.Foreground(lipgloss.Color("111"))
 	return table.New().
 		Border(lipgloss.HiddenBorder()).
 		BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).BorderHeader(false).
-		Headers("NAME", "UPDATED", "DESCRIPTION").
+		Headers(headers...).
 		Rows(rows...).
 		StyleFunc(func(row, col int) lipgloss.Style {
 			if row == table.HeaderRow {
 				return header
 			}
-			if col == 0 {
+			if col == highlight {
 				return name
 			}
 			return cell

@@ -15,6 +15,7 @@ func NewApp() *cli.Command {
 			listCommand(),
 			configureCommand(),
 			cloneCommand(),
+			prCommand(),
 		},
 	}
 }

@@ -1,10 +1,13 @@
 package bb
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -23,6 +26,8 @@ var requiredScopes = []string{
 	"read:workspace:bitbucket",
 	"read:repository:bitbucket",
 	"write:repository:bitbucket",
+	"read:pullrequest:bitbucket",
+	"write:pullrequest:bitbucket",
 }
 
 var httpClient = &http.Client{Timeout: 15 * time.Second}
@@ -52,21 +57,44 @@ var errNotFound = errors.New("not found (404)")
 // get performs an authenticated GET and returns the response on HTTP 200.
 // The caller must close the response body.
 func get(ctx context.Context, cfg *Config, endpoint string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return do(ctx, cfg, http.MethodGet, endpoint, nil)
+}
+
+// do performs an authenticated request, sending body (if non-nil) as JSON, and returns the
+// response on HTTP 200 or 201. The caller must close the response body.
+func do(ctx context.Context, cfg *Config, method, endpoint string, body any) (*http.Response, error) {
+	return doAccepting(ctx, cfg, method, endpoint, body, "application/json")
+}
+
+// doAccepting is do with an explicit Accept header, for endpoints that don't return JSON.
+func doAccepting(ctx context.Context, cfg *Config, method, endpoint string, body any, accept string) (*http.Response, error) {
+	var payload io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		payload = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, payload)
 	if err != nil {
 		return nil, err
 	}
 	req.SetBasicAuth(cfg.Email, cfg.Token)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("reach Bitbucket: %w", err)
 	}
-	if resp.StatusCode == http.StatusOK {
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
 		return resp, nil
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
@@ -76,8 +104,32 @@ func get(ctx context.Context, cfg *Config, endpoint string) (*http.Response, err
 	case http.StatusNotFound:
 		return nil, errNotFound
 	default:
+		if msg := apiErrorMessage(resp.Body); msg != "" {
+			return nil, fmt.Errorf("Bitbucket rejected the request (%s): %s", resp.Status, msg)
+		}
 		return nil, fmt.Errorf("unexpected response from Bitbucket: %s", resp.Status)
 	}
+}
+
+// apiErrorMessage extracts the human-readable message from a Bitbucket error body, including
+// any per-field problems, or returns "" if the body isn't one.
+func apiErrorMessage(r io.Reader) string {
+	var body struct {
+		Error struct {
+			Message string              `json:"message"`
+			Fields  map[string][]string `json:"fields"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r, 1<<20)).Decode(&body); err != nil {
+		return ""
+	}
+
+	var msg strings.Builder
+	msg.WriteString(body.Error.Message)
+	for _, field := range slices.Sorted(maps.Keys(body.Error.Fields)) {
+		msg.WriteString(fmt.Sprintf(" [%s: %s]", field, strings.Join(body.Error.Fields[field], "; ")))
+	}
+	return msg.String()
 }
 
 // checkCredentials verifies the email/token pair can access the workspace.
@@ -166,4 +218,130 @@ func listRepositories(ctx context.Context, cfg *Config, progress func(fetched, t
 
 	slices.SortFunc(repos, func(a, b Repository) int { return strings.Compare(a.Slug, b.Slug) })
 	return repos, nil
+}
+
+// PullRequest is the subset of the Bitbucket pull request resource that bb uses.
+type PullRequest struct {
+	ID     int    `json:"id"`
+	Title  string `json:"title"`
+	State  string `json:"state"`
+	Author struct {
+		DisplayName string `json:"display_name"`
+	} `json:"author"`
+	Source struct {
+		Branch struct {
+			Name string `json:"name"`
+		} `json:"branch"`
+	} `json:"source"`
+	UpdatedOn time.Time `json:"updated_on"`
+	Links     struct {
+		HTML struct {
+			Href string `json:"href"`
+		} `json:"html"`
+	} `json:"links"`
+}
+
+// URL is the pull request's page in the Bitbucket web UI.
+func (p *PullRequest) URL() string { return p.Links.HTML.Href }
+
+// listPullRequests returns the pull requests of a repository in the configured workspace that
+// are in any of states (Bitbucket's upper-case names, e.g. "OPEN"), most recently updated first.
+func listPullRequests(ctx context.Context, cfg *Config, slug string, states []string) ([]PullRequest, error) {
+	q := url.Values{"pagelen": {"50"}, "sort": {"-updated_on"}, "state": states}
+	next := fmt.Sprintf("%s/repositories/%s/%s/pullrequests?%s",
+		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), q.Encode())
+
+	var prs []PullRequest
+	for next != "" {
+		resp, err := get(ctx, cfg, next)
+		if errors.Is(err, errNotFound) {
+			return nil, fmt.Errorf("repository %q not found in workspace %q, or your account can't see it (404)", slug, cfg.Workspace)
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		var page struct {
+			Values []PullRequest `json:"values"`
+			Next   string        `json:"next"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&page)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decode pull requests: %w", err)
+		}
+		prs = append(prs, page.Values...)
+		next = page.Next
+	}
+	return prs, nil
+}
+
+// newPullRequest is what `bb pr create` asks Bitbucket to open.
+type newPullRequest struct {
+	Title       string
+	Description string
+	Source      string // source branch
+	Destination string // destination branch
+	Draft       bool
+}
+
+// createPullRequest opens a pull request in a repository of the configured workspace.
+func createPullRequest(ctx context.Context, cfg *Config, slug string, pr newPullRequest) (*PullRequest, error) {
+	type branchRef struct {
+		Branch struct {
+			Name string `json:"name"`
+		} `json:"branch"`
+	}
+	ref := func(name string) (r branchRef) { r.Branch.Name = name; return }
+
+	body := struct {
+		Title       string    `json:"title"`
+		Description string    `json:"description,omitempty"`
+		Source      branchRef `json:"source"`
+		Destination branchRef `json:"destination"`
+		Draft       bool      `json:"draft,omitempty"`
+	}{pr.Title, pr.Description, ref(pr.Source), ref(pr.Destination), pr.Draft}
+
+	endpoint := fmt.Sprintf("%s/repositories/%s/%s/pullrequests", bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug))
+	resp, err := do(ctx, cfg, http.MethodPost, endpoint, body)
+	if errors.Is(err, errNotFound) {
+		return nil, fmt.Errorf("repository %q not found in workspace %q, or your account can't see it (404)", slug, cfg.Workspace)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var created PullRequest
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return nil, fmt.Errorf("decode pull request: %w", err)
+	}
+	return &created, nil
+}
+
+// maxDiffBytes caps how much of a pull request diff is downloaded for previewing.
+const maxDiffBytes = 4 << 20
+
+// getPullRequestDiff fetches the unified diff of a pull request. truncated reports that the
+// diff was longer than maxDiffBytes and the rest was dropped.
+func getPullRequestDiff(ctx context.Context, cfg *Config, slug string, id int) (diff string, truncated bool, err error) {
+	endpoint := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/diff",
+		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
+	resp, err := doAccepting(ctx, cfg, http.MethodGet, endpoint, nil, "text/plain, */*")
+	if errors.Is(err, errNotFound) {
+		return "", false, fmt.Errorf("diff of pull request #%d not found (404)", id)
+	}
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDiffBytes+1))
+	if err != nil {
+		return "", false, fmt.Errorf("read diff: %w", err)
+	}
+	if len(data) > maxDiffBytes {
+		return strings.ToValidUTF8(string(data[:maxDiffBytes]), "�"), true, nil
+	}
+	return strings.ToValidUTF8(string(data), "�"), false, nil
 }

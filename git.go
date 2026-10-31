@@ -3,6 +3,7 @@ package bb
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"os/exec"
@@ -98,4 +99,59 @@ func normalizeGitURL(raw string) string {
 
 	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
 	return strings.ToLower(strings.Trim(host+"/"+path, "/"))
+}
+
+// checkoutRepoSlug finds which repository in workspace the git checkout containing dir is a
+// clone of, judging by its remotes ("origin" wins when several match).
+func checkoutRepoSlug(ctx context.Context, git, dir, workspace string) (string, bool) {
+	remotes, err := gitOutput(ctx, git, dir, "remote")
+	if err != nil {
+		return "", false
+	}
+
+	var found string
+	for remote := range strings.FieldsSeq(remotes) {
+		configured, err := gitOutput(ctx, git, dir, "remote", "get-url", "--all", remote)
+		if err != nil {
+			continue
+		}
+		for u := range strings.FieldsSeq(configured) {
+			slug, ok := bitbucketRepoSlug(u, workspace)
+			if !ok {
+				continue
+			}
+			if remote == "origin" {
+				return slug, true
+			}
+			if found == "" {
+				found = slug
+			}
+		}
+	}
+	return found, found != ""
+}
+
+// bitbucketRepoSlug extracts the repository slug from a bitbucket.org remote URL, provided it
+// belongs to workspace.
+func bitbucketRepoSlug(remoteURL, workspace string) (string, bool) {
+	parts := strings.Split(normalizeGitURL(remoteURL), "/")
+	if len(parts) != 3 || parts[0] != "bitbucket.org" || parts[1] != strings.ToLower(workspace) {
+		return "", false
+	}
+	return parts[2], true
+}
+
+// currentBranch returns the branch checked out in dir, failing on a detached HEAD.
+func currentBranch(ctx context.Context, git, dir string) (string, error) {
+	out, err := gitOutput(ctx, git, dir, "symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return "", errors.New("no branch is checked out")
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// lastCommitSubject returns the first line of HEAD's commit message, or "" if there is none.
+func lastCommitSubject(ctx context.Context, git, dir string) string {
+	out, _ := gitOutput(ctx, git, dir, "log", "-1", "--format=%s")
+	return strings.TrimSpace(out)
 }
