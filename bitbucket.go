@@ -48,7 +48,25 @@ type Repository struct {
 			Name string `json:"name"`
 			Href string `json:"href"`
 		} `json:"clone"`
+		HTML struct {
+			Href string `json:"href"`
+		} `json:"html"`
 	} `json:"links"`
+}
+
+// webURL is the repository's page in the Bitbucket web UI.
+func (r *Repository) webURL(workspace string) string {
+	if r.Links.HTML.Href != "" {
+		return r.Links.HTML.Href
+	}
+	return fmt.Sprintf("https://bitbucket.org/%s/%s", url.PathEscape(workspace), url.PathEscape(r.Slug))
+}
+
+// repoNotFoundError says a repository doesn't exist in the workspace (or isn't visible).
+type repoNotFoundError struct{ slug, workspace string }
+
+func (e *repoNotFoundError) Error() string {
+	return fmt.Sprintf("repository %q not found in workspace %q, or your account can't see it (404)", e.slug, e.workspace)
 }
 
 // errNotFound is returned by get for HTTP 404; callers say what wasn't found.
@@ -152,7 +170,7 @@ func notFoundAsWorkspace(err error, cfg *Config) error {
 func getRepository(ctx context.Context, cfg *Config, slug string) (*Repository, error) {
 	resp, err := get(ctx, cfg, fmt.Sprintf("%s/repositories/%s/%s", bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug)))
 	if errors.Is(err, errNotFound) {
-		return nil, fmt.Errorf("repository %q not found in workspace %q, or your account can't see it (404)", slug, cfg.Workspace)
+		return nil, &repoNotFoundError{slug, cfg.Workspace}
 	}
 	if err != nil {
 		return nil, err
