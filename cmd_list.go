@@ -22,6 +22,12 @@ const (
 	sortUpdated = "updated"
 )
 
+// sortValues are the values --sort accepts, as offered by shell completion.
+var sortValues = []completionValue{
+	{sortName, "A-Z"},
+	{sortUpdated, "newest first"},
+}
+
 func listCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "list",
@@ -53,7 +59,7 @@ func listCommand() *cli.Command {
 				Usage: "sort by `COLUMN`: name (A-Z) or updated (newest first)",
 			},
 		},
-		ShellComplete: completeRepoNames(0),
+		ShellComplete: completeFlagValues("sort", sortValues, completeRepoNames(0)),
 		Action:        runList,
 	}
 }

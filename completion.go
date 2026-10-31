@@ -56,3 +56,39 @@ func completeConfigNames(ctx context.Context, cmd *cli.Command) {
 		fmt.Fprintln(cmd.Root().Writer, name)
 	}
 }
+
+// completionValue is a value offered for a flag, with a short description some shells display.
+type completionValue struct{ value, description string }
+
+// completeFlagValues returns a shell-completion handler that offers values for the string flag
+// name (given as "--name VALUE" or "--name=VALUE") and otherwise defers to next.
+//
+// The shell scripts pass only the words before the cursor, plus the current word if it starts
+// with "-". So after "--name " the flag has no value yet and is left at the end of the
+// arguments, while "--name=par" arrives complete with the partial value in the flag. A value
+// that is already complete can't be told apart from "--name VALUE " (completing what follows),
+// so that case is left to next.
+func completeFlagValues(name string, values []completionValue, next cli.ShellCompleteFunc) cli.ShellCompleteFunc {
+	return func(ctx context.Context, cmd *cli.Command) {
+		out := cmd.Root().Writer
+		offer := func(prefix, partial string) {
+			for _, v := range values {
+				if strings.HasPrefix(v.value, partial) {
+					fmt.Fprintf(out, "%s%s:%s\n", prefix, v.value, v.description)
+				}
+			}
+		}
+
+		given := cmd.Args().Slice()
+		if n := len(given); n > 0 && (given[n-1] == "--"+name || given[n-1] == "-"+name) {
+			offer("", "")
+			return
+		}
+		if partial := cmd.String(name); cmd.IsSet(name) && !slices.ContainsFunc(values, func(v completionValue) bool { return v.value == partial }) &&
+			slices.ContainsFunc(values, func(v completionValue) bool { return strings.HasPrefix(v.value, partial) }) {
+			offer("--"+name+"=", partial)
+			return
+		}
+		next(ctx, cmd)
+	}
+}

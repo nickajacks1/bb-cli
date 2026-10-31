@@ -85,3 +85,79 @@ func TestFilterRepositories(t *testing.T) {
 		}
 	}
 }
+
+// completeLines runs a completion request and returns its output lines (token:description).
+func completeLines(t *testing.T, args ...string) []string {
+	t.Helper()
+	var buf bytes.Buffer
+	app := NewApp()
+	app.Writer = &buf
+	if err := app.Run(context.Background(), append([]string{"bb"}, args...)); err != nil {
+		t.Fatal(err)
+	}
+	out := strings.TrimSpace(buf.String())
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
+}
+
+func TestSortFlagCompletion(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	if _, err := saveConfig(&Config{Workspace: "ws", Email: "e", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveRepoCache("ws", []Repository{{Slug: "alpha"}, {Slug: "bravo"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	both := []string{"name:A-Z", "updated:newest first"}
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"after --sort", []string{"ls", "--sort"}, both},
+		{"after -sort", []string{"ls", "-sort"}, both},
+		{"after the alias, with other flags first", []string{"list", "-q", "--refresh", "--sort"}, both},
+		{"--sort= with nothing typed", []string{"ls", "--sort="}, []string{"--sort=name:A-Z", "--sort=updated:newest first"}},
+		{"--sort= with a partial value", []string{"ls", "--sort=up"}, []string{"--sort=updated:newest first"}},
+		// Once the value is given the next word is a repository name again.
+		{"value given", []string{"ls", "--sort", "name"}, []string{"alpha:", "bravo:"}},
+		{"value given, repo typed", []string{"ls", "--sort", "updated", "alpha"}, []string{"bravo:"}},
+		// A value nothing could complete to isn't ours to guess at.
+		{"unknown value", []string{"ls", "--sort=zzz"}, []string{"alpha:", "bravo:"}},
+		// Without the flag, nothing changes.
+		{"plain", []string{"ls"}, []string{"alpha:", "bravo:"}},
+	}
+	for _, tc := range tests {
+		got := completeLines(t, append(tc.args, "--generate-shell-completion")...)
+		for i := range got { // repo names have no description; normalize for comparison
+			if !strings.Contains(got[i], ":") {
+				got[i] += ":"
+			}
+		}
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// Other commands are untouched.
+	if got := completeLines(t, "clone", "--sort", "--generate-shell-completion"); len(got) != 0 && got[0] == "name:A-Z" {
+		t.Errorf("clone should not offer sort values, got %q", got)
+	}
+}
+
+func TestSortCompletionOffersOnlyValuesTheFlagAccepts(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // unconfigured: a valid --sort gets past validation to "not configured"
+	for _, v := range sortValues {
+		err := runBB("ls", "--sort", v.value)
+		if err == nil || strings.Contains(err.Error(), "invalid --sort") {
+			t.Errorf("completion offers %q but --sort rejects it: %v", v.value, err)
+		}
+	}
+	if err := runBB("ls", "--sort", "bogus"); err == nil || !strings.Contains(err.Error(), "invalid --sort") {
+		t.Errorf("sanity check failed: %v", err)
+	}
+}
