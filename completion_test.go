@@ -1,4 +1,4 @@
-package main
+package bb
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 func complete(t *testing.T, args ...string) []string {
 	t.Helper()
 	var buf bytes.Buffer
-	app := newApp()
+	app := NewApp()
 	app.Writer = &buf
 	if err := app.Run(context.Background(), append([]string{"bb"}, args...)); err != nil {
 		t.Fatal(err)

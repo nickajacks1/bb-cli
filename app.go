@@ -1,14 +1,9 @@
-package main
+package bb
 
-import (
-	"context"
-	"fmt"
-	"os"
+import "github.com/urfave/cli/v3"
 
-	"github.com/urfave/cli/v3"
-)
-
-func newApp() *cli.Command {
+// NewApp builds the root `bb` command.
+func NewApp() *cli.Command {
 	return &cli.Command{
 		Name:                  "bb",
 		Usage:                 "A command line interface for Bitbucket",
@@ -21,13 +16,5 @@ func newApp() *cli.Command {
 			configureCommand(),
 			cloneCommand(),
 		},
-	}
-}
-
-func main() {
-	cmd := newApp()
-	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
 	}
 }

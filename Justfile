@@ -1,6 +1,6 @@
 build:
     @mkdir -p ./build
-    go build -o ./build/bb .
+    go build -o ./build/bb ./cmd/bb
 
 test:
     go test ./...
