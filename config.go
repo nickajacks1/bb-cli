@@ -7,13 +7,18 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// Config holds everything needed to talk to the Bitbucket Cloud API.
+// Config holds everything needed to talk to the Bitbucket Cloud API, plus local preferences.
 type Config struct {
+	// Workspace is the Bitbucket workspace slug (the <workspace> in bitbucket.org/<workspace>/<repo>).
 	Workspace string `json:"workspace"`
 	Email     string `json:"email"`
 	Token     string `json:"token"`
+	// Home is the local directory repositories are cloned into by default. Not to be confused
+	// with Workspace (a Bitbucket slug) or the user's $HOME: it is a path on disk, and optional.
+	Home string `json:"home,omitempty"`
 }
 
 func configPath() (string, error) {
@@ -56,6 +61,41 @@ func requireConfig() (*Config, error) {
 		return nil, errors.New("bb is not configured: run `bb configure` first")
 	}
 	return cfg, nil
+}
+
+// requireHome returns the configured local home directory, or an error telling the
+// user to configure one or use alternative (a description of what to do instead).
+func (c *Config) requireHome(alternative string) (string, error) {
+	if c.Home == "" {
+		return "", fmt.Errorf("home directory is not configured: run `bb configure` to set one, %s", alternative)
+	}
+	return c.Home, nil
+}
+
+// normalizeHome expands a leading ~ and makes the path absolute. An empty path stays
+// empty (meaning "not configured"). It fails if the path exists but isn't a directory.
+func normalizeHome(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", nil
+	}
+
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("expand ~: %w", err)
+		}
+		p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+	}
+
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+		return "", fmt.Errorf("%s exists and is not a directory", abs)
+	}
+	return abs, nil
 }
 
 // saveConfig writes the config with owner-only permissions, since it contains a token.

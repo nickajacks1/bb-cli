@@ -3,6 +3,7 @@ package bb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -45,6 +46,9 @@ type Repository struct {
 	} `json:"links"`
 }
 
+// errNotFound is returned by get for HTTP 404; callers say what wasn't found.
+var errNotFound = errors.New("not found (404)")
+
 // get performs an authenticated GET and returns the response on HTTP 200.
 // The caller must close the response body.
 func get(ctx context.Context, cfg *Config, endpoint string) (*http.Response, error) {
@@ -70,7 +74,7 @@ func get(ctx context.Context, cfg *Config, endpoint string) (*http.Response, err
 	case http.StatusForbidden:
 		return nil, fmt.Errorf("token is missing a required scope (403): needs %s", strings.Join(requiredScopes, ", "))
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("workspace %q not found, or your account can't see it (404)", cfg.Workspace)
+		return nil, errNotFound
 	default:
 		return nil, fmt.Errorf("unexpected response from Bitbucket: %s", resp.Status)
 	}
@@ -80,9 +84,53 @@ func get(ctx context.Context, cfg *Config, endpoint string) (*http.Response, err
 func checkCredentials(ctx context.Context, cfg *Config) error {
 	resp, err := get(ctx, cfg, fmt.Sprintf("%s/workspaces/%s", bitbucketAPI, url.PathEscape(cfg.Workspace)))
 	if err != nil {
-		return err
+		return notFoundAsWorkspace(err, cfg)
 	}
 	return resp.Body.Close()
+}
+
+func notFoundAsWorkspace(err error, cfg *Config) error {
+	if errors.Is(err, errNotFound) {
+		return fmt.Errorf("workspace %q not found, or your account can't see it (404)", cfg.Workspace)
+	}
+	return err
+}
+
+// getRepository fetches a single repository from the configured workspace.
+func getRepository(ctx context.Context, cfg *Config, slug string) (*Repository, error) {
+	resp, err := get(ctx, cfg, fmt.Sprintf("%s/repositories/%s/%s", bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug)))
+	if errors.Is(err, errNotFound) {
+		return nil, fmt.Errorf("repository %q not found in workspace %q, or your account can't see it (404)", slug, cfg.Workspace)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var repo Repository
+	if err := json.NewDecoder(resp.Body).Decode(&repo); err != nil {
+		return nil, fmt.Errorf("decode repository: %w", err)
+	}
+	return &repo, nil
+}
+
+// cloneURLs returns every clone URL the repository advertises, whatever the protocol.
+func (r *Repository) cloneURLs() []string {
+	urls := make([]string, 0, len(r.Links.Clone))
+	for _, l := range r.Links.Clone {
+		urls = append(urls, l.Href)
+	}
+	return urls
+}
+
+// cloneURL returns the repository's clone URL for the given protocol ("ssh" or "https").
+func (r *Repository) cloneURL(protocol string) (string, error) {
+	for _, l := range r.Links.Clone {
+		if l.Name == protocol {
+			return l.Href, nil
+		}
+	}
+	return "", fmt.Errorf("repository %q has no %s clone URL", r.Slug, protocol)
 }
 
 // listRepositories returns every repository in the configured workspace, sorted by slug.
@@ -95,7 +143,7 @@ func listRepositories(ctx context.Context, cfg *Config, progress func(fetched, t
 	for next != "" {
 		resp, err := get(ctx, cfg, next)
 		if err != nil {
-			return nil, err
+			return nil, notFoundAsWorkspace(err, cfg)
 		}
 
 		var page struct {

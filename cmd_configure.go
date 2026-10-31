@@ -21,8 +21,14 @@ var (
 
 func configureCommand() *cli.Command {
 	return &cli.Command{
-		Name:   "configure",
-		Usage:  "Interactively set up workspace and credentials",
+		Name:  "configure",
+		Usage: "Interactively set up workspace and credentials",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "reauth",
+				Usage: "walk through creating and entering a new API token even if one is already set",
+			},
+		},
 		Action: runConfigure,
 	}
 }
@@ -37,12 +43,18 @@ func runConfigure(ctx context.Context, cmd *cli.Command) error {
 	lipgloss.Println(dimStyle.Render("Bitbucket Cloud authenticates with an Atlassian API token."))
 	fmt.Println()
 
-	if err := offerTokenCreation(cfg); err != nil {
-		return handleAbort(err)
+	// With a token already stored, skip the "create a token" step unless asked to start over.
+	reauth := cmd.Bool("reauth")
+	keepingToken := !needsTokenSetup(cfg, reauth)
+	if !keepingToken {
+		cfg.Token = "" // reauthenticating means entering a new one, not accepting the old
+		if err := offerTokenCreation(); err != nil {
+			return handleAbort(err)
+		}
 	}
 
 	for {
-		if err := promptCredentials(cfg); err != nil {
+		if err := promptCredentials(cfg, keepingToken); err != nil {
 			return handleAbort(err)
 		}
 
@@ -88,12 +100,30 @@ func runConfigure(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	lipgloss.Println(successStyle.Render("✓ Saved config to " + path))
+	if cfg.Home == "" {
+		lipgloss.Println(dimStyle.Render("No home directory set: `bb clone <repo>` needs a destination, e.g. `bb clone <repo> .`"))
+	}
 	return nil
 }
 
+// needsTokenSetup reports whether configure should walk the user through creating a token:
+// when none is stored yet, or when they asked to start over with --reauth.
+func needsTokenSetup(cfg *Config, reauth bool) bool {
+	return cfg.Token == "" || reauth
+}
+
+// tokenDescription is the help text under the token field. When an existing token is being
+// kept, it points at --reauth for replacing it.
+func tokenDescription(keepingToken bool) string {
+	if keepingToken {
+		return "Press enter to keep the current token, or run `bb configure --reauth` to create a new one"
+	}
+	return "Paste the token you just created"
+}
+
 // offerTokenCreation optionally opens the Atlassian token page, listing the scopes to select.
-func offerTokenCreation(cfg *Config) error {
-	open := cfg.Token == "" // default to helping first-time users
+func offerTokenCreation() error {
+	open := true // we only ask when a token is needed, so default to helping
 	scopes := "Create a token with scopes, choose Bitbucket as the app, and select:\n  • " +
 		strings.Join(requiredScopes, "\n  • ")
 
@@ -117,8 +147,9 @@ func offerTokenCreation(cfg *Config) error {
 	return nil
 }
 
-// promptCredentials asks for the workspace, email, and token, pre-filled from cfg.
-func promptCredentials(cfg *Config) error {
+// promptCredentials asks for the Bitbucket workspace, email, token and local home directory,
+// pre-filled from cfg. keepingToken says cfg.Token is an existing token the user can accept as-is.
+func promptCredentials(cfg *Config, keepingToken bool) error {
 	required := func(name string) func(string) error {
 		return func(s string) error {
 			if strings.TrimSpace(s) == "" {
@@ -131,7 +162,7 @@ func promptCredentials(cfg *Config) error {
 	err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
-				Title("Workspace").
+				Title("Bitbucket workspace").
 				Description("The slug in bitbucket.org/<workspace>/<repo>").
 				Value(&cfg.Workspace).
 				Validate(required("workspace")),
@@ -142,16 +173,30 @@ func promptCredentials(cfg *Config) error {
 				Validate(required("email")),
 			huh.NewInput().
 				Title("API token").
-				Description("Paste the token you just created").
+				Description(tokenDescription(keepingToken)).
 				EchoMode(huh.EchoModePassword).
 				Value(&cfg.Token).
 				Validate(required("token")),
+			huh.NewInput().
+				Title("Home directory (optional)").
+				Description("bb's home for cloned repositories (not your $HOME). Leave blank to always give a destination.").
+				Placeholder("~/code").
+				Value(&cfg.Home).
+				Validate(func(s string) error {
+					_, err := normalizeHome(s)
+					return err
+				}),
 		),
 	).Run()
 
 	cfg.Workspace = strings.TrimSpace(cfg.Workspace)
 	cfg.Email = strings.TrimSpace(cfg.Email)
 	cfg.Token = strings.TrimSpace(cfg.Token)
+	if err != nil {
+		return err
+	}
+
+	cfg.Home, err = normalizeHome(cfg.Home)
 	return err
 }
 
