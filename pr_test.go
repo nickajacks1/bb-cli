@@ -185,17 +185,17 @@ func TestPRSelector(t *testing.T) {
 		return next.(prSelector)
 	}
 
-	m := press(press(newPRSelector(prs, nil), tea.KeyDown), tea.KeyEnter)
+	m := press(press(newPRSelector(prs, prActions{}), tea.KeyDown), tea.KeyEnter)
 	if m.selected == nil || m.selected.ID != 2 {
 		t.Errorf("down+enter selected %+v, want #2", m.selected)
 	}
 
 	for _, key := range []rune{'q', tea.KeyEscape} {
-		if m := press(newPRSelector(prs, nil), key); m.selected != nil {
+		if m := press(newPRSelector(prs, prActions{}), key); m.selected != nil {
 			t.Errorf("key %q should cancel, selected %+v", key, m.selected)
 		}
 	}
-	if !strings.Contains(newPRSelector(prs, nil).View().Content, "Second") {
+	if !strings.Contains(newPRSelector(prs, prActions{}).View().Content, "Second") {
 		t.Error("view should list the pull requests")
 	}
 }

@@ -39,7 +39,11 @@ func prListCommand() *cli.Command {
 		Description: "REPO defaults to the repository the current git checkout was cloned from.\n\n" +
 			"On a terminal this opens an interactive table: move with the arrow keys, press enter to\n" +
 			"open the selected pull request in your browser (its URL is also printed), v to preview its\n" +
-			"diff in the terminal, q to quit.\n" +
+			"diff in the terminal, c to comment on it, q to quit.\n\n" +
+			"In the diff preview, s switches between unified and side-by-side layouts (side by side\n" +
+			"needs a wide terminal), j/k move a line cursor, c comments on the cursor's line, and\n" +
+			"C comments on the pull request as a whole. In the side-by-side layout, h/l choose\n" +
+			"whether the old or the new side is commented on. ctrl+s posts a comment.\n" +
 			"When output is piped, the table is printed instead.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -90,8 +94,13 @@ func runPRList(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
-	pr, err := selectPullRequest(prs, func(pr PullRequest) (string, bool, error) {
-		return getPullRequestDiff(ctx, cfg, slug, pr.ID)
+	pr, err := selectPullRequest(prs, prActions{
+		loadDiff: func(pr PullRequest) (string, bool, error) {
+			return getPullRequestDiff(ctx, cfg, slug, pr.ID)
+		},
+		postComment: func(pr PullRequest, c newComment) error {
+			return createComment(ctx, cfg, slug, pr.ID, c)
+		},
 	})
 	if err != nil || pr == nil {
 		return err

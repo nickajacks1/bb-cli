@@ -345,3 +345,41 @@ func getPullRequestDiff(ctx context.Context, cfg *Config, slug string, id int) (
 	}
 	return strings.ToValidUTF8(string(data), "�"), false, nil
 }
+
+// newComment is a comment to post on a pull request: a general one, or an inline one when Path
+// is set (From for a removed line, To for an added or unchanged line).
+type newComment struct {
+	Body     string
+	Path     string
+	From, To int
+}
+
+// createComment posts a comment on a pull request of a repository in the configured workspace.
+func createComment(ctx context.Context, cfg *Config, slug string, id int, c newComment) error {
+	type inline struct {
+		Path string `json:"path"`
+		From int    `json:"from,omitempty"`
+		To   int    `json:"to,omitempty"`
+	}
+	body := struct {
+		Content struct {
+			Raw string `json:"raw"`
+		} `json:"content"`
+		Inline *inline `json:"inline,omitempty"`
+	}{}
+	body.Content.Raw = c.Body
+	if c.Path != "" {
+		body.Inline = &inline{Path: c.Path, From: c.From, To: c.To}
+	}
+
+	endpoint := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/comments",
+		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
+	resp, err := do(ctx, cfg, http.MethodPost, endpoint, body)
+	if errors.Is(err, errNotFound) {
+		return fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
+	}
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
