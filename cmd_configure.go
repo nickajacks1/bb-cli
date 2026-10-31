@@ -21,8 +21,9 @@ var (
 
 func configureCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "configure",
-		Usage: "Interactively set up workspace and credentials",
+		Name:    "configure",
+		Aliases: []string{"config"},
+		Usage:   "Interactively set up workspace and credentials",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "reauth",
@@ -30,7 +31,106 @@ func configureCommand() *cli.Command {
 			},
 		},
 		Action: runConfigure,
+		Commands: []*cli.Command{
+			configureGetCommand(),
+			configureSetCommand(),
+		},
 	}
+}
+
+func configureGetCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "get",
+		Usage:     "Print config options",
+		ArgsUsage: "[NAME]",
+		Description: "Without NAME, prints every option as name=value.\n" +
+			"With NAME, prints just that value, and fails if it is not set.\n" +
+			"Secrets such as the token are shown as asterisks unless --unsafe-show-secrets is given.\n\n" +
+			"Options: " + strings.Join(configOptionNames(), ", "),
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "unsafe-show-secrets",
+				Usage: "print secrets such as the token in plain text",
+			},
+		},
+		ShellComplete: completeConfigNames,
+		Action:        runConfigureGet,
+	}
+}
+
+func configureSetCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "set",
+		Usage:     "Set a config option",
+		ArgsUsage: "NAME VALUE",
+		Description: "Options: " + strings.Join(configOptionNames(), ", ") + "\n\n" +
+			"The value is not verified against Bitbucket; use `bb configure` for that.\n" +
+			"Set the optional home to an empty string to clear it.",
+		ShellComplete: completeConfigNames,
+		Action:        runConfigureSet,
+	}
+}
+
+func runConfigureGet(ctx context.Context, cmd *cli.Command) error {
+	if cmd.NArg() > 1 {
+		return fmt.Errorf("expected at most one option name, got %d", cmd.NArg())
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	out := cmd.Root().Writer
+	showSecrets := cmd.Bool("unsafe-show-secrets")
+
+	if cmd.NArg() == 1 {
+		opt, err := lookupConfigOption(cmd.Args().First())
+		if err != nil {
+			return err
+		}
+		v, err := opt.get(cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, opt.display(v, showSecrets))
+		return nil
+	}
+
+	for i := range configOptions {
+		opt := &configOptions[i]
+		fmt.Fprintf(out, "%s=%s\n", opt.name, opt.display(*opt.field(cfg), showSecrets))
+	}
+	return nil
+}
+
+func runConfigureSet(ctx context.Context, cmd *cli.Command) error {
+	if cmd.NArg() != 2 {
+		return fmt.Errorf("expected an option name and a value, e.g. `bb configure set workspace my-team` (got %d arguments)", cmd.NArg())
+	}
+	opt, err := lookupConfigOption(cmd.Args().Get(0))
+	if err != nil {
+		return err
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if err := opt.set(cfg, cmd.Args().Get(1)); err != nil {
+		return err
+	}
+	if _, err := saveConfig(cfg); err != nil {
+		return err
+	}
+
+	msg := "✓ Set " + opt.name
+	if !opt.secret {
+		if v := *opt.field(cfg); v != "" {
+			msg += " to " + v
+		} else {
+			msg = "✓ Cleared " + opt.name
+		}
+	}
+	lipgloss.Fprintln(cmd.Root().Writer, successStyle.Render(msg))
+	return nil
 }
 
 func runConfigure(ctx context.Context, cmd *cli.Command) error {

@@ -10,6 +10,76 @@ import (
 	"strings"
 )
 
+// configOption describes one named setting for `bb configure get/set`.
+type configOption struct {
+	name   string
+	secret bool // masked by `get` unless --unsafe-show-secrets is given
+	// optional options may be cleared by setting an empty value.
+	optional bool
+	field    func(*Config) *string
+	// normalize validates and canonicalizes a value before it is stored; nil means trim only.
+	normalize func(string) (string, error)
+}
+
+var configOptions = []configOption{
+	{name: "workspace", field: func(c *Config) *string { return &c.Workspace }},
+	{name: "email", field: func(c *Config) *string { return &c.Email }},
+	{name: "token", secret: true, field: func(c *Config) *string { return &c.Token }},
+	{name: "home", optional: true, field: func(c *Config) *string { return &c.Home }, normalize: normalizeHome},
+}
+
+func configOptionNames() []string {
+	names := make([]string, len(configOptions))
+	for i, o := range configOptions {
+		names[i] = o.name
+	}
+	return names
+}
+
+// lookupConfigOption finds an option by name, listing the valid names when it is unknown.
+func lookupConfigOption(name string) (*configOption, error) {
+	for i := range configOptions {
+		if configOptions[i].name == name {
+			return &configOptions[i], nil
+		}
+	}
+	return nil, fmt.Errorf("unknown config option %q: valid options are %s", name, strings.Join(configOptionNames(), ", "))
+}
+
+// get returns the option's current value, failing with a hint when it is unset.
+func (o *configOption) get(c *Config) (string, error) {
+	v := *o.field(c)
+	if v == "" {
+		return "", fmt.Errorf("%s is not set: run `bb configure` or `bb configure set %s <value>`", o.name, o.name)
+	}
+	return v, nil
+}
+
+// display returns v as it should be printed: secrets are masked unless showSecrets is set.
+// An unset (empty) value is never masked.
+func (o *configOption) display(v string, showSecrets bool) string {
+	if o.secret && v != "" && !showSecrets {
+		return "********"
+	}
+	return v
+}
+
+// set validates value and stores it in c.
+func (o *configOption) set(c *Config, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" && !o.optional {
+		return fmt.Errorf("%s cannot be empty", o.name)
+	}
+	if o.normalize != nil {
+		var err error
+		if value, err = o.normalize(value); err != nil {
+			return err
+		}
+	}
+	*o.field(c) = value
+	return nil
+}
+
 // Config holds everything needed to talk to the Bitbucket Cloud API, plus local preferences.
 type Config struct {
 	// Workspace is the Bitbucket workspace slug (the <workspace> in bitbucket.org/<workspace>/<repo>).

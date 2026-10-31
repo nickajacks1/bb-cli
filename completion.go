@@ -41,3 +41,18 @@ func completeRepoNames(max int) cli.ShellCompleteFunc {
 		}
 	}
 }
+
+// completeConfigNames offers config option names for the first argument of `configure get/set`.
+func completeConfigNames(ctx context.Context, cmd *cli.Command) {
+	given := cmd.Args().Slice()
+	if n := len(given); n > 0 && strings.HasPrefix(given[n-1], "-") {
+		cli.DefaultCompleteWithFlags(ctx, cmd)
+		return
+	}
+	if len(given) > 0 {
+		return
+	}
+	for _, name := range configOptionNames() {
+		fmt.Fprintln(cmd.Root().Writer, name)
+	}
+}
