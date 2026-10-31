@@ -13,8 +13,10 @@ import (
 	"github.com/charmbracelet/x/term"
 )
 
-type progressMsg struct{ fetched, total int }
-type fetchDoneMsg struct{}
+type (
+	progressMsg  struct{ fetched, total int }
+	fetchDoneMsg struct{}
+)
 
 // fetchModel renders a spinner, a progress bar, and an optional tip while repositories load.
 type fetchModel struct {

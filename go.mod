@@ -1,6 +1,6 @@
 module github.com/nickajacks1/bb-cli
 
-go 1.27.3
+go 1.27
 
 require (
 	charm.land/bubbles/v2 v2.0.0
