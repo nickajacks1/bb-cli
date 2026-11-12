@@ -239,7 +239,7 @@ func offerTokenCreation() error {
 		return err
 	}
 
-	if err := openBrowser(apiTokenURL); err != nil {
+	if err := launchBrowser(apiTokenURL); err != nil {
 		lipgloss.Println(errorStyle.Render("Couldn't launch a browser: " + err.Error()))
 	}
 	lipgloss.Println(dimStyle.Render("If nothing opened, visit: " + apiTokenURL))

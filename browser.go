@@ -5,6 +5,10 @@ import (
 	"runtime"
 )
 
+// launchBrowser opens a URL in the user's browser. Commands call it rather than openBrowser,
+// so tests can replace it and never launch a real browser.
+var launchBrowser = openBrowser
+
 // openBrowser asks the OS to open url in the default browser without waiting for it.
 func openBrowser(url string) error {
 	var cmd *exec.Cmd

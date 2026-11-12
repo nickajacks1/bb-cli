@@ -120,7 +120,7 @@ func runPRList(ctx context.Context, cmd *cli.Command) error {
 	if err != nil || pr == nil {
 		return err
 	}
-	return openPullRequest(out, os.Stderr, pr, openBrowser)
+	return openPullRequest(out, os.Stderr, pr, launchBrowser)
 }
 
 // printPRTable writes the static table, through a pager when it goes to the real stdout.

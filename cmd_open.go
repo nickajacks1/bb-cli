@@ -14,9 +14,6 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// launchBrowser opens a URL in the user's browser; a variable so tests can replace it.
-var launchBrowser = openBrowser
-
 // maxParallelLookups caps the repository requests made at once.
 const maxParallelLookups = 8
 
