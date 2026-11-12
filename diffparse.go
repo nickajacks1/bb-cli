@@ -1,6 +1,7 @@
 package bb
 
 import (
+	"cmp"
 	"regexp"
 	"strconv"
 	"strings"
@@ -84,18 +85,17 @@ func parseDiff(diff string) []diffLine {
 		oldPath, newPath string
 		oldNo, newNo     int
 		oldLeft, newLeft int // lines still expected in the current hunk
-		pathFor          = func(preferred, other string) string { return cmpOr(preferred, other) }
 		addContent       = func(kind diffKind, text string) {
 			l := diffLine{kind: kind, text: text}
 			switch kind {
 			case diffContext:
-				l.oldNo, l.newNo, l.path = oldNo, newNo, pathFor(newPath, oldPath)
+				l.oldNo, l.newNo, l.path = oldNo, newNo, cmp.Or(newPath, oldPath)
 				oldNo, newNo, oldLeft, newLeft = oldNo+1, newNo+1, oldLeft-1, newLeft-1
 			case diffAdd:
-				l.newNo, l.path = newNo, pathFor(newPath, oldPath)
+				l.newNo, l.path = newNo, cmp.Or(newPath, oldPath)
 				newNo, newLeft = newNo+1, newLeft-1
 			case diffDel:
-				l.oldNo, l.path = oldNo, pathFor(oldPath, newPath)
+				l.oldNo, l.path = oldNo, cmp.Or(oldPath, newPath)
 				oldNo, oldLeft = oldNo+1, oldLeft-1
 			}
 			out = append(out, l)
@@ -180,13 +180,6 @@ func countOrOne(s string) int {
 		return 1
 	}
 	return atoi(s)
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 // diffRow is one screen row of the diff viewer: the lines shown on its left and right (indexes
