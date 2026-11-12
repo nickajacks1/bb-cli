@@ -86,7 +86,17 @@ func runBBOut(args ...string) (string, error) {
 	var buf bytes.Buffer
 	app := NewApp()
 	app.Writer = &buf
-	err := app.Run(context.Background(), append([]string{"bb"}, args...))
+	// git's progress and failure messages are attached directly to the process streams by
+	// clone, so silence them while exercising the command in tests.
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		return "", err
+	}
+	defer devNull.Close()
+	stdout, stderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = devNull, devNull
+	defer func() { os.Stdout, os.Stderr = stdout, stderr }()
+	err = app.Run(context.Background(), append([]string{"bb"}, args...))
 	return buf.String(), err
 }
 
