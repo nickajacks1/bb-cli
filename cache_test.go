@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,5 +158,29 @@ func TestSortRepositories(t *testing.T) {
 	sortRepositories(repos, sortName)
 	if got := slugs(); got != "abc" {
 		t.Errorf("name sort = %s, want abc", got)
+	}
+}
+
+func TestListPrintsToTheCommandWriter(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"size":2,"values":[{"slug":"beta"},{"slug":"alpha"}]}`)
+	}))
+	defer srv.Close()
+	old := bitbucketAPI
+	bitbucketAPI = srv.URL
+	defer func() { bitbucketAPI = old }()
+	if _, err := saveConfig(&Config{Workspace: "ws", Email: "e", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runBBOut("ls", "-q")
+	if err != nil || out != "alpha\nbeta\n" {
+		t.Errorf("ls -q: out = %q, err = %v", out, err)
+	}
+	out, err = runBBOut("ls")
+	if err != nil || !strings.Contains(out, "NAME") || !strings.Contains(out, "alpha") {
+		t.Errorf("ls: out = %q, err = %v", out, err)
 	}
 }

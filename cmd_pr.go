@@ -96,7 +96,7 @@ func runPRList(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	if !term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(os.Stdout.Fd()) {
-		printPRTable(out, prs)
+		printPaged(out, renderPRTable(prs), len(prs)+1)
 		return nil
 	}
 
@@ -121,15 +121,6 @@ func runPRList(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	return openPullRequest(out, os.Stderr, pr, launchBrowser)
-}
-
-// printPRTable writes the static table, through a pager when it goes to the real stdout.
-func printPRTable(out io.Writer, prs []PullRequest) {
-	if out == os.Stdout {
-		printPaged(renderPRTable(prs), len(prs)+1)
-		return
-	}
-	lipgloss.Fprintln(out, renderPRTable(prs))
 }
 
 // openPullRequest prints the pull request's URL to out and tries to open it with open. Not being

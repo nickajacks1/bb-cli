@@ -110,10 +110,10 @@ func runList(ctx context.Context, cmd *cli.Command) error {
 		for i, r := range repos {
 			names[i] = r.Slug
 		}
-		printPaged(strings.Join(names, "\n"), len(names))
+		printPaged(cmd.Root().Writer, strings.Join(names, "\n"), len(names))
 		return nil // keep stdout and stderr clean for scripting
 	}
-	printPaged(renderRepoTable(repos), len(repos)+1)
+	printPaged(cmd.Root().Writer, renderRepoTable(repos), len(repos)+1)
 
 	if !cachedAt.IsZero() {
 		lipgloss.Fprintln(os.Stderr, dimStyle.Render(fmt.Sprintf(

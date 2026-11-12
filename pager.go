@@ -1,6 +1,7 @@
 package bb
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -9,19 +10,21 @@ import (
 	"github.com/charmbracelet/x/term"
 )
 
-// printPaged writes s to stdout, sending it through a pager when stdout is a terminal
-// and the output (lines long) wouldn't fit on screen. When stdout is redirected or piped
-// the output is written directly, with colors stripped.
-func printPaged(s string, lines int) {
-	fd := os.Stdout.Fd()
-	if term.IsTerminal(fd) {
-		if _, height, err := term.GetSize(fd); err == nil && lines >= height {
-			if runPager(s) {
-				return
+// printPaged writes s to out, sending it through a pager when out is stdout on a terminal
+// and the output (lines long) wouldn't fit on screen. Otherwise (redirected, piped, or another
+// writer such as a test's buffer) it is written directly, with colors stripped.
+func printPaged(out io.Writer, s string, lines int) {
+	if out == os.Stdout {
+		fd := os.Stdout.Fd()
+		if term.IsTerminal(fd) {
+			if _, height, err := term.GetSize(fd); err == nil && lines >= height {
+				if runPager(s) {
+					return
+				}
 			}
 		}
 	}
-	lipgloss.Println(s)
+	lipgloss.Fprintln(out, s)
 }
 
 // runPager pipes s through the user's pager and reports whether it ran.
