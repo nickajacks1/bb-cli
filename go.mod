@@ -9,7 +9,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/urfave/cli/v3 v3.14.0
+	github.com/urfave/cli/v3 v3.14.1-0.20261107174217-025d95388564
 )
 
 require (
