@@ -69,6 +69,10 @@ func (e *repoNotFoundError) Error() string {
 	return fmt.Sprintf("repository %q not found in workspace %q, or your account can't see it (404)", e.slug, e.workspace)
 }
 
+func pullRequestNotFound(cfg *Config, slug string, id int) error {
+	return fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
+}
+
 // errNotFound is returned by get for HTTP 404; callers say what wasn't found.
 var errNotFound = errors.New("not found (404)")
 
@@ -207,35 +211,47 @@ func (r *Repository) cloneURL(protocol string) (string, error) {
 // If progress is non-nil it is called after each page with the number of repositories
 // fetched so far and the workspace total (0 if Bitbucket didn't report one).
 func listRepositories(ctx context.Context, cfg *Config, progress func(fetched, total int)) ([]Repository, error) {
-	var repos []Repository
+	first := fmt.Sprintf("%s/repositories/%s?pagelen=100", bitbucketAPI, url.PathEscape(cfg.Workspace))
+	repos, err := getAllPages[Repository](ctx, cfg, first, notFoundAsWorkspace(errNotFound, cfg), progress)
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(repos, func(a, b Repository) int { return strings.Compare(a.Slug, b.Slug) })
+	return repos, nil
+}
 
-	next := fmt.Sprintf("%s/repositories/%s?pagelen=100", bitbucketAPI, url.PathEscape(cfg.Workspace))
-	for next != "" {
+// getAllPages follows a paginated Bitbucket listing from first to its last page and returns
+// every value. A 404 is reported as notFound. If progress is non-nil it is called after each
+// page with the number of values fetched so far and the total (0 if Bitbucket didn't say).
+func getAllPages[T any](ctx context.Context, cfg *Config, first string, notFound error, progress func(fetched, total int)) ([]T, error) {
+	var all []T
+	for next := first; next != ""; {
 		resp, err := get(ctx, cfg, next)
+		if errors.Is(err, errNotFound) {
+			return nil, notFound
+		}
 		if err != nil {
-			return nil, notFoundAsWorkspace(err, cfg)
+			return nil, err
 		}
 
 		var page struct {
-			Size   int          `json:"size"`
-			Values []Repository `json:"values"`
-			Next   string       `json:"next"`
+			Size   int    `json:"size"`
+			Values []T    `json:"values"`
+			Next   string `json:"next"`
 		}
 		err = json.NewDecoder(resp.Body).Decode(&page)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("decode repositories: %w", err)
+			return nil, fmt.Errorf("decode Bitbucket response from %s: %w", next, err)
 		}
 
-		repos = append(repos, page.Values...)
+		all = append(all, page.Values...)
 		next = page.Next
 		if progress != nil {
-			progress(len(repos), page.Size)
+			progress(len(all), page.Size)
 		}
 	}
-
-	slices.SortFunc(repos, func(a, b Repository) int { return strings.Compare(a.Slug, b.Slug) })
-	return repos, nil
+	return all, nil
 }
 
 // PullRequest is the subset of the Bitbucket pull request resource that bb uses.
@@ -266,32 +282,10 @@ func (p *PullRequest) URL() string { return p.Links.HTML.Href }
 // are in any of states (Bitbucket's upper-case names, e.g. "OPEN"), most recently updated first.
 func listPullRequests(ctx context.Context, cfg *Config, slug string, states []string) ([]PullRequest, error) {
 	q := url.Values{"pagelen": {"50"}, "sort": {"-updated_on"}, "state": states}
-	next := fmt.Sprintf("%s/repositories/%s/%s/pullrequests?%s",
+	first := fmt.Sprintf("%s/repositories/%s/%s/pullrequests?%s",
 		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), q.Encode())
 
-	var prs []PullRequest
-	for next != "" {
-		resp, err := get(ctx, cfg, next)
-		if errors.Is(err, errNotFound) {
-			return nil, fmt.Errorf("repository %q not found in workspace %q, or your account can't see it (404)", slug, cfg.Workspace)
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		var page struct {
-			Values []PullRequest `json:"values"`
-			Next   string        `json:"next"`
-		}
-		err = json.NewDecoder(resp.Body).Decode(&page)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("decode pull requests: %w", err)
-		}
-		prs = append(prs, page.Values...)
-		next = page.Next
-	}
-	return prs, nil
+	return getAllPages[PullRequest](ctx, cfg, first, &repoNotFoundError{slug, cfg.Workspace}, nil)
 }
 
 // newPullRequest is what `bb pr create` asks Bitbucket to open.
@@ -323,7 +317,7 @@ func createPullRequest(ctx context.Context, cfg *Config, slug string, pr newPull
 	endpoint := fmt.Sprintf("%s/repositories/%s/%s/pullrequests", bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug))
 	resp, err := do(ctx, cfg, http.MethodPost, endpoint, body)
 	if errors.Is(err, errNotFound) {
-		return nil, fmt.Errorf("repository %q not found in workspace %q, or your account can't see it (404)", slug, cfg.Workspace)
+		return nil, &repoNotFoundError{slug, cfg.Workspace}
 	}
 	if err != nil {
 		return nil, err
@@ -394,7 +388,7 @@ func createComment(ctx context.Context, cfg *Config, slug string, id int, c newC
 		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
 	resp, err := do(ctx, cfg, http.MethodPost, endpoint, body)
 	if errors.Is(err, errNotFound) {
-		return fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
+		return pullRequestNotFound(cfg, slug, id)
 	}
 	if err != nil {
 		return err
@@ -404,32 +398,10 @@ func createComment(ctx context.Context, cfg *Config, slug string, id int, c newC
 
 // listComments returns every comment on a pull request, inline and general, in API order.
 func listComments(ctx context.Context, cfg *Config, slug string, id int) ([]Comment, error) {
-	next := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/comments?pagelen=100",
+	first := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/comments?pagelen=100",
 		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
 
-	var comments []Comment
-	for next != "" {
-		resp, err := get(ctx, cfg, next)
-		if errors.Is(err, errNotFound) {
-			return nil, fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		var page struct {
-			Values []Comment `json:"values"`
-			Next   string    `json:"next"`
-		}
-		err = json.NewDecoder(resp.Body).Decode(&page)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("decode comments: %w", err)
-		}
-		comments = append(comments, page.Values...)
-		next = page.Next
-	}
-	return comments, nil
+	return getAllPages[Comment](ctx, cfg, first, pullRequestNotFound(cfg, slug, id), nil)
 }
 
 // approvePullRequest approves a pull request as the authenticated user. Approving twice is harmless.
@@ -438,7 +410,7 @@ func approvePullRequest(ctx context.Context, cfg *Config, slug string, id int) e
 		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
 	resp, err := do(ctx, cfg, http.MethodPost, endpoint, nil)
 	if errors.Is(err, errNotFound) {
-		return fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
+		return pullRequestNotFound(cfg, slug, id)
 	}
 	if err != nil {
 		return err
@@ -455,30 +427,8 @@ type BuildStatus struct {
 
 // listBuildStatuses returns the build statuses reported for a pull request.
 func listBuildStatuses(ctx context.Context, cfg *Config, slug string, id int) ([]BuildStatus, error) {
-	next := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/statuses?pagelen=100",
+	first := fmt.Sprintf("%s/repositories/%s/%s/pullrequests/%d/statuses?pagelen=100",
 		bitbucketAPI, url.PathEscape(cfg.Workspace), url.PathEscape(slug), id)
 
-	var statuses []BuildStatus
-	for next != "" {
-		resp, err := get(ctx, cfg, next)
-		if errors.Is(err, errNotFound) {
-			return nil, fmt.Errorf("pull request #%d not found in %s/%s (404)", id, cfg.Workspace, slug)
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		var page struct {
-			Values []BuildStatus `json:"values"`
-			Next   string        `json:"next"`
-		}
-		err = json.NewDecoder(resp.Body).Decode(&page)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("decode build statuses: %w", err)
-		}
-		statuses = append(statuses, page.Values...)
-		next = page.Next
-	}
-	return statuses, nil
+	return getAllPages[BuildStatus](ctx, cfg, first, pullRequestNotFound(cfg, slug, id), nil)
 }
