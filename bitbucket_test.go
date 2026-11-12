@@ -71,4 +71,14 @@ func TestTruncate(t *testing.T) {
 	if got := truncate("héllo wörld", 5); got != "héll…" {
 		t.Errorf("got %q", got)
 	}
+	// Titles, names and descriptions come from other people: no terminal escapes may get through.
+	if got := truncate("evil\x1b]52;c;cm0gLXJm\x07 title", 80); strings.ContainsAny(got, "\x1b\x07") {
+		t.Errorf("escape sequence kept: %q", got)
+	}
+}
+
+func TestInlineDescriptionSanitizesPath(t *testing.T) {
+	if got := inlineDescription(inlineRef{path: "a\x1b[2Jb.go", to: 3}); strings.Contains(got, "\x1b") {
+		t.Errorf("escape sequence kept: %q", got)
+	}
 }

@@ -121,10 +121,11 @@ func (m prSelector) updateDiff(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // inlineDescription says where an inline comment will attach, e.g. "f.go:34 (new)".
 func inlineDescription(ref inlineRef) string {
+	path := sanitizeText(ref.path) // comments from Bitbucket carry their own, untrusted path
 	if ref.to > 0 {
-		return fmt.Sprintf("%s:%d (new)", ref.path, ref.to)
+		return fmt.Sprintf("%s:%d (new)", path, ref.to)
 	}
-	return fmt.Sprintf("%s:%d (old)", ref.path, ref.from)
+	return fmt.Sprintf("%s:%d (old)", path, ref.from)
 }
 
 func (m prSelector) diffView() string {

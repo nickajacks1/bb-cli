@@ -234,8 +234,9 @@ func renderTable(headers []string, rows [][]string, highlight int) string {
 		Render()
 }
 
+// truncate makes untrusted text from Bitbucket safe to print on one line and caps it at max runes.
 func truncate(s string, max int) string {
-	s = strings.Join(strings.Fields(s), " ") // collapse newlines so rows stay on one line
+	s = strings.Join(strings.Fields(sanitizeText(s)), " ") // collapse newlines so rows stay on one line
 	r := []rune(s)
 	if len(r) <= max {
 		return s
