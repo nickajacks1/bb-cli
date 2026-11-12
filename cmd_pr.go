@@ -90,7 +90,8 @@ func runPRList(ctx context.Context, cmd *cli.Command) error {
 
 	out := cmd.Root().Writer
 	if len(prs) == 0 {
-		fmt.Fprintf(out, "No %s pull requests in %s/%s\n", strings.ToLower(cmd.String("state")), cfg.Workspace, slug)
+		// A note, not a result: keep it off stdout so scripts see an empty list.
+		fmt.Fprintf(cmd.Root().ErrWriter, "No %s pull requests in %s/%s\n", strings.ToLower(cmd.String("state")), cfg.Workspace, slug)
 		return nil
 	}
 

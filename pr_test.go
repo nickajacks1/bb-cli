@@ -78,6 +78,30 @@ func TestPRListPrintsTableWhenNotInteractive(t *testing.T) {
 	}
 }
 
+func TestPRListWithNoPullRequestsKeepsStdoutEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"values":[]}`)
+	}))
+	t.Cleanup(srv.Close)
+	old := bitbucketAPI
+	bitbucketAPI = srv.URL
+	t.Cleanup(func() { bitbucketAPI = old })
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if _, err := saveConfig(&Config{Workspace: "ws", Email: "e", Token: "t"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := NewApp()
+	app.Writer, app.ErrWriter = &stdout, &stderr
+	if err := app.Run(t.Context(), []string{"bb", "pr", "list", "foo"}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "No open pull requests") {
+		t.Errorf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
 func TestPRListStateFlag(t *testing.T) {
 	queries := prEnv(t)
 	if err := runBB("pr", "list", "foo", "--state", "merged,Declined"); err != nil {

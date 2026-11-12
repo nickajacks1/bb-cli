@@ -99,7 +99,7 @@ func runList(ctx context.Context, cmd *cli.Command) error {
 	quiet := cmd.Bool("quiet")
 	if len(repos) == 0 {
 		if !quiet {
-			fmt.Printf("No repositories found in workspace %q\n", cfg.Workspace)
+			fmt.Fprintf(cmd.Root().ErrWriter, "No repositories found in workspace %q\n", cfg.Workspace)
 		}
 		return nil
 	}
