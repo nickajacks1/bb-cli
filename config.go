@@ -184,12 +184,28 @@ func saveConfig(cfg *Config) (string, error) {
 		return "", err
 	}
 
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	if err := writeFileAtomic(path, append(data, '\n')); err != nil {
 		return "", fmt.Errorf("write config: %w", err)
 	}
-	// WriteFile only applies the mode when creating the file.
-	if err := os.Chmod(path, 0o600); err != nil {
-		return "", fmt.Errorf("chmod config: %w", err)
-	}
 	return path, nil
+}
+
+// writeFileAtomic replaces path with data, readable only by the owner. It writes a temporary
+// file and renames it into place, so an interrupted write never leaves a truncated file and the
+// data is never readable by others, even for a moment.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*.tmp") // created 0600
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // a no-op once renamed
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

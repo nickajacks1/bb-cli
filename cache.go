@@ -63,21 +63,7 @@ func saveRepoCache(workspace string, repos []Repository) error {
 		return err
 	}
 
-	// Write-then-rename so an interrupted write never leaves a truncated cache.
-	tmp, err := os.CreateTemp(filepath.Dir(path), "repos-*.tmp")
-	if err != nil {
-		return fmt.Errorf("write cache: %w", err)
-	}
-	defer os.Remove(tmp.Name())
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write cache: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("write cache: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := writeFileAtomic(path, data); err != nil {
 		return fmt.Errorf("write cache: %w", err)
 	}
 	return nil

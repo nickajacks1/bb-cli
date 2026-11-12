@@ -195,3 +195,32 @@ func TestCompleteConfigNames(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveConfigTightensPermissionsAndLeavesNoTempFiles(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path, err := configPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil { // e.g. made by hand
+		t.Fatal(err)
+	}
+
+	if _, err := saveConfig(&Config{Workspace: "ws", Email: "e", Token: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("config perms = %v, err = %v", info.Mode().Perm(), err)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	if len(entries) != 1 {
+		t.Errorf("want only config.json in the config dir, got %v", entries)
+	}
+	cfg, err := loadConfig()
+	if err != nil || cfg.Token != "secret" {
+		t.Errorf("cfg = %+v, err = %v", cfg, err)
+	}
+}
